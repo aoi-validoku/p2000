@@ -630,6 +630,37 @@ mark {{
   font-weight: 600;
 }}
 
+.map-button {{
+  background: linear-gradient(135deg, #4ecdc4 0%, #44a08d 100%);
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 1.2em;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-decoration: none;
+  display: inline-block;
+  box-shadow: 0 2px 8px rgba(78, 205, 196, 0.3);
+  line-height: 1;
+}}
+
+.map-button:hover {{
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(78, 205, 196, 0.5);
+  background: linear-gradient(135deg, #5eddd4 0%, #54b09d 100%);
+}}
+
+.map-button:active {{
+  transform: translateY(0);
+}}
+
+.map-button:disabled {{
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: rgba(255, 255, 255, 0.1);
+}}
+
 @media (max-width: 768px) {{
   .header h1 {{ font-size: 1.8em; }}
   #clock {{ font-size: 1.5em; }}
@@ -671,6 +702,7 @@ mark {{
           <th>📋 Capcodes</th>
           <th>📝 Type</th>
           <th>💬 Bericht</th>
+          <th>🗺️ Map</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -725,6 +757,68 @@ function highlightText(text, query) {{
   return text.replace(regex, '<mark>$1</mark>');
 }}
 
+function extractLocation(text) {{
+  if (!text) return null;
+  
+  // Common Dutch location patterns
+  const patterns = [
+    // Street with number: "Straatnaam 123" or "Straatnaam 123AB"
+    /([A-Z][a-z]+(?:straat|laan|weg|plein|dijk|kade|park|singel|gracht|hof|pad|steeg|drift|brug|tunnel|toren|toren|kade|kade)[^,]*\s+\d+[A-Z0-9]*)/i,
+    // City names (common Dutch cities - capitalized words that might be cities)
+    /([A-Z][a-z]+(?:dam|dijk|burg|stad|wijk|hout|berg|horst|recht|kerk|wijk|meer|veer|mond|zijde|land|rijk|hoven|ingen|um|en|aar|eek|oord|wijk))/i,
+    // Street names without numbers
+    /([A-Z][a-z]+(?:straat|laan|weg|plein|dijk|kade|park|singel|gracht|hof|pad|steeg|drift))/i,
+    // Postal code pattern (4 digits + 2 letters): "1234AB"
+    /(\d{{4}}\s*[A-Z]{{2}})/i,
+    // Address-like: "Word 123 City" or "Street City"
+    /([A-Z][a-z]+\s+\d+[A-Z0-9]*\s+[A-Z][a-z]+)/i,
+  ];
+  
+  // Try each pattern
+  for (const pattern of patterns) {{
+    const match = text.match(pattern);
+    if (match) {{
+      let location = match[1].trim();
+      // Clean up common prefixes/suffixes
+      location = location.replace(/^(rit|rit:|bon|bon:|dia|dia:)\s*/i, '');
+      location = location.replace(/\s+(rit|bon|dia).*$/i, '');
+      if (location.length > 3) {{
+        return location;
+      }}
+    }}
+  }}
+  
+  // Fallback: try to extract any capitalized word sequences (potential city/street names)
+  const words = text.split(/\s+/);
+  const locationWords = [];
+  for (let i = 0; i < words.length; i++) {{
+    const word = words[i];
+    // Skip common non-location words
+    if (/^(A[0-2]|B[12]|P1|TEST|AMBU|DIA|RIT|BON|ja|nee)$/i.test(word)) continue;
+    // Look for capitalized words (potential locations)
+    if (/^[A-Z][a-z]+$/.test(word) && word.length > 3) {{
+      locationWords.push(word);
+      // Take up to 3 words for location
+      if (locationWords.length >= 3) break;
+    }}
+  }}
+  
+  if (locationWords.length > 0) {{
+    return locationWords.join(' ');
+  }}
+  
+  return null;
+}}
+
+function getMapUrl(text) {{
+  const location = extractLocation(text);
+  if (!location) return null;
+  
+  // Encode location for URL
+  const encodedLocation = encodeURIComponent(location + ', Nederland');
+  return `https://www.openstreetmap.org/search?query=${{encodedLocation}}`;
+}}
+
 function renderRow(m, isNew = false) {{
   const r = document.createElement("tr");
   r.dataset.utc = m.time_utc;
@@ -737,13 +831,19 @@ function renderRow(m, isNew = false) {{
   const recentIcon = isRecent(m.time_utc) ? "🔔 " : "";
   const highlightedText = highlightText(m.text, searchQuery);
   const highlightedType = highlightText(m.type, searchQuery);
+  const mapUrl = getMapUrl(m.text);
+  
+  const mapButton = mapUrl 
+    ? `<a href="${{mapUrl}}" target="_blank" rel="noopener noreferrer" class="map-button" title="Open op OpenStreetMap">🗺️</a>`
+    : `<span class="map-button" style="opacity: 0.3; cursor: default;" title="Geen locatie gevonden">🗺️</span>`;
   
   r.innerHTML =
     `<td>${{recentIcon}}${{m.time_local}}</td>
      <td><span class="prio ${{prioClass}}">${{m.prio}}</span></td>
      <td>${{m.capcodes_named}}</td>
      <td>${{highlightedType}}</td>
-     <td>${{highlightedText}}</td>`;
+     <td>${{highlightedText}}</td>
+     <td style="text-align: center;">${{mapButton}}</td>`;
   return r;
 }}
 
