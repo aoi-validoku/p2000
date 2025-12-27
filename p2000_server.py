@@ -829,8 +829,6 @@ function renderRow(m, isNew = false) {{
   
   const prioClass = getPrioClass(m.prio);
   const recentIcon = isRecent(m.time_utc) ? "🔔 " : "";
-  const highlightedText = highlightText(m.text, searchQuery);
-  const highlightedType = highlightText(m.type, searchQuery);
   const mapUrl = getMapUrl(m.text);
   
   const mapButton = mapUrl 
@@ -841,8 +839,8 @@ function renderRow(m, isNew = false) {{
     `<td>${{recentIcon}}${{m.time_local}}</td>
      <td><span class="prio ${{prioClass}}">${{m.prio}}</span></td>
      <td>${{m.capcodes_named}}</td>
-     <td>${{highlightedType}}</td>
-     <td>${{highlightedText}}</td>
+     <td>${{m.type}}</td>
+     <td>${{m.text}}</td>
      <td style="text-align: center;">${{mapButton}}</td>`;
   return r;
 }}
