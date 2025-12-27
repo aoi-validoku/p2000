@@ -697,12 +697,12 @@ mark {{
     <table id="tbl">
       <thead>
         <tr>
-          <th>⏰ Tijd</th>
-          <th>⚡ Prio</th>
-          <th>📋 Capcodes</th>
-          <th>📝 Type</th>
-          <th>💬 Bericht</th>
-          <th>🗺️ Map</th>
+          <th>Tijd</th>
+          <th>Prio</th>
+          <th>Capcodes</th>
+          <th>Type</th>
+          <th>Bericht</th>
+          <th>Map</th>
         </tr>
       </thead>
       <tbody></tbody>
