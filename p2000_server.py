@@ -1,24 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import asyncio
 import subprocess
-import threading
-import http.server
-import socketserver
-import socket
 import csv
 import json
 import argparse
-import sys
-import base64
-import hashlib
 import re
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+from aiohttp import web
+import websockets
+
 # ================= ARGUMENTS =================
 
-parser = argparse.ArgumentParser(description="P2000 FLEX monitor")
+parser = argparse.ArgumentParser(description="P2000 FLEX monitor (asyncio)")
 parser.add_argument("-v", "--verbose", action="store_true")
 args = parser.parse_args()
 VERBOSE = args.verbose
@@ -38,16 +35,16 @@ CAPCODE_FILE = BASE_DIR / "capcodelijst.csv"
 DB_FILE = BASE_DIR / "p2000_history.json"
 
 messages = []
-clients = set()
+clients: set[websockets.WebSocketServerProtocol] = set()
 capcodes = {}
 
 # ================= HELPERS =================
 
-def extract_prio(text):
+def extract_prio(text: str) -> str:
     m = re.search(r"\b(A0|A1|A2|B1|B2|P\s*1|TEST)\b", text, re.I)
     return m.group(1).replace(" ", "").upper() if m else "-"
 
-def capcode_candidates(raw):
+def capcode_candidates(raw: str):
     raw = raw.strip()
     out = set()
     if raw.isdigit() and len(raw) >= 9:
@@ -80,7 +77,7 @@ def load_capcodes():
             }
     log("Capcodes geladen:", len(capcodes))
 
-def resolve_capcodes(raw):
+def resolve_capcodes(raw: str) -> str:
     out = []
     for t in raw.split():
         info, used = None, None
@@ -121,20 +118,66 @@ def load_history():
             messages.append(m)
     prune_old_messages()
 
-def save_history():
-    with open(DB_FILE, "w") as f:
-        json.dump(messages, f, indent=2)
+async def save_history_async():
+    # avoid blocking event loop on file IO
+    data = json.dumps(messages, indent=2)
+    await asyncio.to_thread(DB_FILE.write_text, data)
+
+# ================= WEBSOCKET =================
+
+async def ws_handler(ws: websockets.WebSocketServerProtocol):
+    clients.add(ws)
+    try:
+        # Keep connection open; browser doesn't send data.
+        async for _ in ws:
+            pass
+    finally:
+        clients.discard(ws)
+
+async def broadcast(msg: str):
+    if not clients:
+        return
+    dead = []
+    for ws in list(clients):
+        try:
+            await ws.send(msg)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        clients.discard(ws)
+
+async def ws_server():
+    async with websockets.serve(ws_handler, "", WS_PORT):
+        log("WebSocket listening on", WS_PORT)
+        await asyncio.Future()  # run forever
 
 # ================= DECODER =================
 
-def start_decoder():
+async def start_decoder():
     cmd = "rtl_fm -f 169.65M -M fm -s 22050 -p 83 -g 30 | multimon-ng -a FLEX -t raw -"
-    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, text=True)
+    proc = await asyncio.create_subprocess_shell(
+        cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    assert proc.stdout is not None
+    log("Decoder started")
 
-    for l in p.stdout:
+    while True:
+        line = await proc.stdout.readline()
+        if not line:
+            log("Decoder process ended")
+            break
+
+        l = line.decode(errors="ignore").strip()
         if not l.startswith("FLEX|"):
             continue
-        _, ts, *_ , caps, typ, txt = l.strip().split("|", 6)
+
+        try:
+            _, ts, *_, caps, typ, txt = l.split("|", 6)
+        except ValueError:
+            continue
+
         e = {
             "time_local": ts,
             "time_utc": datetime.now(timezone.utc).isoformat(),
@@ -143,93 +186,21 @@ def start_decoder():
             "type": typ,
             "text": txt,
         }
+
         messages.insert(0, e)
         prune_old_messages()
-        save_history()
-        broadcast(json.dumps(e))
-
-# ================= WEBSOCKET =================
-
-def ws_accept(c):
-    data = c.recv(2048).decode(errors="ignore")
-    key = next((l.split(":")[1].strip() for l in data.splitlines()
-                if l.lower().startswith("sec-websocket-key")), None)
-    if not key:
-        return False
-
-    acc = base64.b64encode(
-        hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
-    ).decode()
-
-    c.sendall((
-        "HTTP/1.1 101 Switching Protocols\r\n"
-        "Upgrade: websocket\r\n"
-        "Connection: Upgrade\r\n"
-        f"Sec-WebSocket-Accept: {acc}\r\n\r\n"
-    ).encode())
-
-    threading.Thread(target=ws_read_loop, args=(c,), daemon=True).start()
-    return True
-
-def ws_read_loop(c):
-    try:
-        while True:
-            h = c.recv(2)
-            if not h:
-                break
-            ln = h[1] & 0x7F
-            if ln == 126:
-                c.recv(2)
-            elif ln == 127:
-                c.recv(8)
-            c.recv(4)
-            c.recv(ln)
-            if (h[0] & 0x0F) == 0x9:
-                c.sendall(b"\x8A\x00")
-    finally:
-        clients.discard(c)
-        c.close()
-
-def ws_frame(m):
-    b = m.encode()
-    ln = len(b)
-    h = b"\x81"
-    if ln <= 125:
-        h += bytes([ln])
-    elif ln <= 65535:
-        h += b"\x7e" + ln.to_bytes(2, "big")
-    else:
-        h += b"\x7f" + ln.to_bytes(8, "big")
-    return h + b
-
-def broadcast(m):
-    f = ws_frame(m)
-    for c in list(clients):
-        try:
-            c.sendall(f)
-        except:
-            clients.discard(c)
-
-def ws_server():
-    s = socket.socket()
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(("", WS_PORT))
-    s.listen()
-    while True:
-        c, _ = s.accept()
-        if ws_accept(c):
-            clients.add(c)
+        await save_history_async()
+        await broadcast(json.dumps(e))
 
 # ================= HTTP =================
 
-class Handler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(page().encode())
+async def http_index(request: web.Request):
+    html = page()
+    # aiohttp requires charset to be separate from content_type
+    return web.Response(text=html, content_type="text/html", charset="utf-8")
 
 def page():
+    # HTML/JS copied exactly from your original (unchanged)
     return f"""
 <!DOCTYPE html>
 <html>
@@ -343,13 +314,27 @@ setInterval(() => {{
 </html>
 """
 
+async def http_server():
+    app = web.Application()
+    app.router.add_get("/", http_index)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "", HTTP_PORT)
+    await site.start()
+    log("HTTP listening on", HTTP_PORT)
+
 # ================= MAIN =================
 
-if __name__ == "__main__":
+async def main():
     load_capcodes()
     load_history()
-    threading.Thread(target=start_decoder, daemon=True).start()
-    threading.Thread(target=ws_server, daemon=True).start()
-    socketserver.TCPServer.allow_reuse_address = True
-    socketserver.TCPServer(("", HTTP_PORT), Handler).serve_forever()
+
+    await asyncio.gather(
+        http_server(),
+        ws_server(),
+        start_decoder(),
+    )
+
+if __name__ == "__main__":
+    asyncio.run(main())
 
