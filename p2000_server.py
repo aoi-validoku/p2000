@@ -380,23 +380,19 @@ body::before {{
   opacity: 0.8;
 }}
 
-.filters {{
-  display: flex;
-  gap: 15px;
-  margin-bottom: 25px;
-  flex-wrap: wrap;
-  justify-content: center;
-  align-items: center;
-}}
-
 .search-container {{
-  width: 100%;
-  max-width: 600px;
-  margin: 0 auto 25px auto;
-  position: relative;
+  margin-bottom: 25px;
+  display: flex;
+  justify-content: center;
 }}
 
 .search-box {{
+  position: relative;
+  width: 100%;
+  max-width: 600px;
+}}
+
+.search-box input {{
   width: 100%;
   padding: 15px 50px 15px 20px;
   border: 2px solid rgba(255, 255, 255, 0.2);
@@ -405,20 +401,20 @@ body::before {{
   backdrop-filter: blur(10px);
   color: #e6edf3;
   font-size: 1em;
-  font-family: inherit;
+  font-weight: 500;
   transition: all 0.3s ease;
   outline: none;
 }}
 
-.search-box:focus {{
+.search-box input::placeholder {{
+  color: rgba(230, 237, 243, 0.5);
+}}
+
+.search-box input:focus {{
   border-color: rgba(37, 99, 235, 0.6);
   background: rgba(255, 255, 255, 0.15);
   box-shadow: 0 4px 20px rgba(37, 99, 235, 0.3);
   transform: translateY(-2px);
-}}
-
-.search-box::placeholder {{
-  color: rgba(230, 237, 243, 0.5);
 }}
 
 .search-icon {{
@@ -427,13 +423,12 @@ body::before {{
   top: 50%;
   transform: translateY(-50%);
   font-size: 1.2em;
+  color: rgba(230, 237, 243, 0.6);
   pointer-events: none;
-  opacity: 0.6;
 }}
 
-.search-box:focus + .search-icon {{
-  opacity: 1;
-  color: #2563eb;
+.search-box input:focus + .search-icon {{
+  color: #58a6ff;
 }}
 
 .search-clear {{
@@ -458,6 +453,14 @@ body::before {{
 
 .search-clear.visible {{
   display: block;
+}}
+
+.filters {{
+  display: flex;
+  gap: 15px;
+  margin-bottom: 25px;
+  flex-wrap: wrap;
+  justify-content: center;
 }}
 
 button {{
@@ -619,11 +622,21 @@ tr:last-child td:last-child {{ border-bottom-right-radius: 10px; }}
   }}
 }}
 
+mark {{
+  background: rgba(88, 166, 255, 0.4) !important;
+  color: #fff;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-weight: 600;
+}}
+
 @media (max-width: 768px) {{
   .header h1 {{ font-size: 1.8em; }}
   #clock {{ font-size: 1.5em; }}
   th, td {{ padding: 10px 8px; font-size: 0.9em; }}
   .table-wrapper {{ padding: 10px; }}
+  .search-box {{ max-width: 100%; }}
+  .search-box input {{ padding: 12px 45px 12px 15px; font-size: 0.9em; }}
 }}
 </style>
 </head>
@@ -636,15 +649,17 @@ tr:last-child td:last-child {{ border-bottom-right-radius: 10px; }}
     <div id="clock"></div>
   </div>
 
+  <div class="search-container">
+    <div class="search-box">
+      <input type="text" id="searchInput" placeholder="🔍 Zoek in berichten, capcodes, type..." autocomplete="off">
+      <span class="search-icon">🔍</span>
+      <button class="search-clear" id="searchClear" title="Clear search">✕</button>
+    </div>
+  </div>
+
   <div class="filters">
     <button id="btnAll" class="active">🌐 Alles</button>
     <button id="btnBeemster">📍 Beemster</button>
-  </div>
-
-  <div class="search-container">
-    <input type="text" id="searchBox" class="search-box" placeholder="🔍 Zoek in berichten, capcodes, type... (live filter)">
-    <span class="search-icon">🔍</span>
-    <button id="searchClear" class="search-clear" title="Wis zoekopdracht">✕</button>
   </div>
 
   <div class="table-wrapper">
@@ -666,8 +681,6 @@ tr:last-child td:last-child {{ border-bottom-right-radius: 10px; }}
 <script>
 const table = document.getElementById("tbl");
 const tbody = table.querySelector("tbody");
-const searchBox = document.getElementById("searchBox");
-const searchClear = document.getElementById("searchClear");
 const INITIAL = {messages_json};
 let filter = "ALL";
 let searchQuery = "";
@@ -676,33 +689,40 @@ function isRecent(utc) {{
   return (Date.now() - new Date(utc).getTime()) <= 5 * 60 * 1000;
 }}
 
-function matchSearch(m, query) {{
-  if (!query || query.trim() === "") return true;
-  const q = query.toLowerCase().trim();
-  
-  // Search in text
-  if (m.text && m.text.toLowerCase().includes(q)) return true;
-  
-  // Search in type
-  if (m.type && m.type.toLowerCase().includes(q)) return true;
-  
-  // Search in capcodes (strip HTML tags for searching)
-  const capcodesText = m.capcodes_named ? m.capcodes_named.replace(/<[^>]*>/g, "").toLowerCase() : "";
-  if (capcodesText.includes(q)) return true;
-  
-  // Search in priority
-  if (m.prio && m.prio.toLowerCase().includes(q)) return true;
-  
-  // Search in time
-  if (m.time_local && m.time_local.toLowerCase().includes(q)) return true;
-  
-  return false;
+function matchSearch(m) {{
+  if (!searchQuery) return true;
+  const query = searchQuery.toLowerCase();
+  return (
+    m.text.toLowerCase().includes(query) ||
+    m.type.toLowerCase().includes(query) ||
+    m.capcodes_named.toLowerCase().includes(query) ||
+    m.time_local.toLowerCase().includes(query) ||
+    (m.prio && m.prio.toLowerCase().includes(query))
+  );
 }}
 
 function matchFilter(m) {{
+  if (!matchSearch(m)) return false;
   if (filter === "ALL") return true;
   if (filter === "BEEMSTER") return m.text.toLowerCase().includes("beemster");
   return true;
+}}
+
+function getPrioClass(prio) {{
+  if (!prio || prio === "-") return "";
+  const p = prio.toUpperCase();
+  if (p.startsWith("A0") || p.startsWith("A1")) return "prio-A0";
+  if (p.startsWith("A2") || p.startsWith("B1")) return "prio-A2";
+  if (p.startsWith("B2") || p.startsWith("P1")) return "prio-B2";
+  return "";
+}}
+
+function highlightText(text, query) {{
+  if (!query) return text;
+  // Escape special regex characters
+  const escapedQuery = query.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
+  const regex = new RegExp(`(${{{{escapedQuery}}}})`, "gi");
+  return text.replace(regex, '<mark>$1</mark>');
 }}
 
 function renderRow(m, isNew = false) {{
@@ -715,53 +735,53 @@ function renderRow(m, isNew = false) {{
   
   const prioClass = getPrioClass(m.prio);
   const recentIcon = isRecent(m.time_utc) ? "🔔 " : "";
+  const highlightedText = highlightText(m.text, searchQuery);
+  const highlightedType = highlightText(m.type, searchQuery);
   
   r.innerHTML =
     `<td>${{recentIcon}}${{m.time_local}}</td>
      <td><span class="prio ${{prioClass}}">${{m.prio}}</span></td>
      <td>${{m.capcodes_named}}</td>
-     <td>${{m.type}}</td>
-     <td>${{m.text}}</td>`;
+     <td>${{highlightedType}}</td>
+     <td>${{highlightedText}}</td>`;
   return r;
-}}
-
-function getPrioClass(prio) {{
-  if (!prio || prio === "-") return "";
-  const p = prio.toUpperCase();
-  if (p.startsWith("A0") || p.startsWith("A1")) return "prio-A0";
-  if (p.startsWith("A2") || p.startsWith("B1")) return "prio-A2";
-  if (p.startsWith("B2") || p.startsWith("P1")) return "prio-B2";
-  return "";
 }}
 
 function rebuild() {{
   tbody.innerHTML = "";
-  const filtered = INITIAL.filter(m => matchFilter(m) && matchSearch(m, searchQuery));
+  const filtered = INITIAL.filter(matchFilter);
   filtered.forEach(m => tbody.appendChild(renderRow(m)));
+  
+  // Show message count
+  const count = filtered.length;
+  console.log(`Showing ${{count}} of ${{INITIAL.length}} messages`);
 }}
 
 // Search functionality
-searchBox.addEventListener("input", (e) => {{
-  searchQuery = e.target.value;
+const searchInput = document.getElementById("searchInput");
+const searchClear = document.getElementById("searchClear");
+
+searchInput.addEventListener("input", (e) => {{
+  searchQuery = e.target.value.trim();
   searchClear.classList.toggle("visible", searchQuery.length > 0);
   rebuild();
 }});
 
 searchClear.addEventListener("click", () => {{
-  searchBox.value = "";
+  searchInput.value = "";
   searchQuery = "";
   searchClear.classList.remove("visible");
   rebuild();
+  searchInput.focus();
 }});
 
 // Clear search on Escape key
-searchBox.addEventListener("keydown", (e) => {{
+searchInput.addEventListener("keydown", (e) => {{
   if (e.key === "Escape") {{
-    searchBox.value = "";
+    searchInput.value = "";
     searchQuery = "";
     searchClear.classList.remove("visible");
     rebuild();
-    searchBox.blur();
   }}
 }});
 
@@ -803,7 +823,7 @@ ws.onclose = () => {{
 ws.onmessage = e => {{
   const m = JSON.parse(e.data);
   INITIAL.unshift(m);
-  if (matchFilter(m) && matchSearch(m, searchQuery)) {{
+  if (matchFilter(m)) {{
     const newRow = renderRow(m, true);
     tbody.insertBefore(newRow, tbody.firstChild);
   }}
