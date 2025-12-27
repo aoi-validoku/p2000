@@ -386,6 +386,78 @@ body::before {{
   margin-bottom: 25px;
   flex-wrap: wrap;
   justify-content: center;
+  align-items: center;
+}}
+
+.search-container {{
+  width: 100%;
+  max-width: 600px;
+  margin: 0 auto 25px auto;
+  position: relative;
+}}
+
+.search-box {{
+  width: 100%;
+  padding: 15px 50px 15px 20px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  color: #e6edf3;
+  font-size: 1em;
+  font-family: inherit;
+  transition: all 0.3s ease;
+  outline: none;
+}}
+
+.search-box:focus {{
+  border-color: rgba(37, 99, 235, 0.6);
+  background: rgba(255, 255, 255, 0.15);
+  box-shadow: 0 4px 20px rgba(37, 99, 235, 0.3);
+  transform: translateY(-2px);
+}}
+
+.search-box::placeholder {{
+  color: rgba(230, 237, 243, 0.5);
+}}
+
+.search-icon {{
+  position: absolute;
+  right: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 1.2em;
+  pointer-events: none;
+  opacity: 0.6;
+}}
+
+.search-box:focus + .search-icon {{
+  opacity: 1;
+  color: #2563eb;
+}}
+
+.search-clear {{
+  position: absolute;
+  right: 50px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: rgba(230, 237, 243, 0.6);
+  font-size: 1.2em;
+  cursor: pointer;
+  padding: 5px;
+  display: none;
+  transition: all 0.2s ease;
+}}
+
+.search-clear:hover {{
+  color: #ff6b6b;
+  transform: translateY(-50%) scale(1.1);
+}}
+
+.search-clear.visible {{
+  display: block;
 }}
 
 button {{
@@ -569,6 +641,12 @@ tr:last-child td:last-child {{ border-bottom-right-radius: 10px; }}
     <button id="btnBeemster">📍 Beemster</button>
   </div>
 
+  <div class="search-container">
+    <input type="text" id="searchBox" class="search-box" placeholder="🔍 Zoek in berichten, capcodes, type... (live filter)">
+    <span class="search-icon">🔍</span>
+    <button id="searchClear" class="search-clear" title="Wis zoekopdracht">✕</button>
+  </div>
+
   <div class="table-wrapper">
     <table id="tbl">
       <thead>
@@ -587,11 +665,38 @@ tr:last-child td:last-child {{ border-bottom-right-radius: 10px; }}
 
 <script>
 const table = document.getElementById("tbl");
+const tbody = table.querySelector("tbody");
+const searchBox = document.getElementById("searchBox");
+const searchClear = document.getElementById("searchClear");
 const INITIAL = {messages_json};
 let filter = "ALL";
+let searchQuery = "";
 
 function isRecent(utc) {{
   return (Date.now() - new Date(utc).getTime()) <= 5 * 60 * 1000;
+}}
+
+function matchSearch(m, query) {{
+  if (!query || query.trim() === "") return true;
+  const q = query.toLowerCase().trim();
+  
+  // Search in text
+  if (m.text && m.text.toLowerCase().includes(q)) return true;
+  
+  // Search in type
+  if (m.type && m.type.toLowerCase().includes(q)) return true;
+  
+  // Search in capcodes (strip HTML tags for searching)
+  const capcodesText = m.capcodes_named ? m.capcodes_named.replace(/<[^>]*>/g, "").toLowerCase() : "";
+  if (capcodesText.includes(q)) return true;
+  
+  // Search in priority
+  if (m.prio && m.prio.toLowerCase().includes(q)) return true;
+  
+  // Search in time
+  if (m.time_local && m.time_local.toLowerCase().includes(q)) return true;
+  
+  return false;
 }}
 
 function matchFilter(m) {{
@@ -600,22 +705,65 @@ function matchFilter(m) {{
   return true;
 }}
 
-function renderRow(m) {{
+function renderRow(m, isNew = false) {{
   const r = document.createElement("tr");
   r.dataset.utc = m.time_utc;
+  if (isNew) {{
+    r.classList.add("new-message");
+    setTimeout(() => r.classList.remove("new-message"), 2000);
+  }}
+  
+  const prioClass = getPrioClass(m.prio);
+  const recentIcon = isRecent(m.time_utc) ? "🔔 " : "";
+  
   r.innerHTML =
-    `<td>${{isRecent(m.time_utc) ? "🔔 " : ""}}${{m.time_local}}</td>
-     <td class="prio">${{m.prio}}</td>
+    `<td>${{recentIcon}}${{m.time_local}}</td>
+     <td><span class="prio ${{prioClass}}">${{m.prio}}</span></td>
      <td>${{m.capcodes_named}}</td>
      <td>${{m.type}}</td>
      <td>${{m.text}}</td>`;
   return r;
 }}
 
-function rebuild() {{
-  [...table.rows].slice(1).forEach(r => r.remove());
-  INITIAL.filter(matchFilter).forEach(m => table.appendChild(renderRow(m)));
+function getPrioClass(prio) {{
+  if (!prio || prio === "-") return "";
+  const p = prio.toUpperCase();
+  if (p.startsWith("A0") || p.startsWith("A1")) return "prio-A0";
+  if (p.startsWith("A2") || p.startsWith("B1")) return "prio-A2";
+  if (p.startsWith("B2") || p.startsWith("P1")) return "prio-B2";
+  return "";
 }}
+
+function rebuild() {{
+  tbody.innerHTML = "";
+  const filtered = INITIAL.filter(m => matchFilter(m) && matchSearch(m, searchQuery));
+  filtered.forEach(m => tbody.appendChild(renderRow(m)));
+}}
+
+// Search functionality
+searchBox.addEventListener("input", (e) => {{
+  searchQuery = e.target.value;
+  searchClear.classList.toggle("visible", searchQuery.length > 0);
+  rebuild();
+}});
+
+searchClear.addEventListener("click", () => {{
+  searchBox.value = "";
+  searchQuery = "";
+  searchClear.classList.remove("visible");
+  rebuild();
+}});
+
+// Clear search on Escape key
+searchBox.addEventListener("keydown", (e) => {{
+  if (e.key === "Escape") {{
+    searchBox.value = "";
+    searchQuery = "";
+    searchClear.classList.remove("visible");
+    rebuild();
+    searchBox.blur();
+  }}
+}});
 
 btnAll.onclick = () => {{
   filter = "ALL";
@@ -623,6 +771,7 @@ btnAll.onclick = () => {{
   btnBeemster.classList.remove("active");
   rebuild();
 }};
+
 btnBeemster.onclick = () => {{
   filter = "BEEMSTER";
   btnBeemster.classList.add("active");
@@ -630,31 +779,55 @@ btnBeemster.onclick = () => {{
   rebuild();
 }};
 
+// Initial render
 INITIAL
   .slice()
-  .sort((a,b)=>new Date(b.time_utc)-new Date(a.time_utc))
-  .forEach(m=>table.appendChild(renderRow(m)));
+  .sort((a,b) => new Date(b.time_utc) - new Date(a.time_utc))
+  .forEach(m => tbody.appendChild(renderRow(m)));
 
+// WebSocket connection
 const ws = new WebSocket("ws://" + location.hostname + ":{WS_PORT}");
+
+ws.onopen = () => {{
+  console.log("WebSocket connected");
+}};
+
+ws.onerror = (error) => {{
+  console.error("WebSocket error:", error);
+}};
+
+ws.onclose = () => {{
+  console.log("WebSocket disconnected");
+}};
+
 ws.onmessage = e => {{
   const m = JSON.parse(e.data);
   INITIAL.unshift(m);
-  if (matchFilter(m))
-    table.insertBefore(renderRow(m), table.rows[1] || null);
+  if (matchFilter(m) && matchSearch(m, searchQuery)) {{
+    const newRow = renderRow(m, true);
+    tbody.insertBefore(newRow, tbody.firstChild);
+  }}
 }};
 
+// Update recent indicators every 30 seconds
 setInterval(() => {{
-  [...table.rows].slice(1).forEach(row => {{
+  [...tbody.rows].forEach(row => {{
     const utc = row.dataset.utc;
     const cell = row.cells[0];
-    const t = cell.textContent.replace("🔔 ","");
-    cell.textContent = (isRecent(utc) ? "🔔 " : "") + t;
+    const text = cell.textContent.replace("🔔 ", "");
+    cell.textContent = (isRecent(utc) ? "🔔 " : "") + text;
   }});
 }}, 30000);
 
-setInterval(() => {{
-  clock.textContent = new Date().toISOString().replace("T"," ").substring(0,19) + " Z";
-}}, 1000);
+// Update Zulu clock every second
+const clock = document.getElementById("clock");
+function updateClock() {{
+  const now = new Date();
+  const zulu = now.toISOString().replace("T", " ").substring(0, 19) + " Z";
+  clock.textContent = zulu;
+}}
+updateClock();
+setInterval(updateClock, 1000);
 </script>
 
 </body>
